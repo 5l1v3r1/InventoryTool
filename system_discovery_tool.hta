@@ -1,0 +1,2309 @@
+<html>
+
+<head>
+
+<title>SIDT Alpha</title>
+
+<HTA:APPLICATION 
+    ID					= "System Inventory and Discovery Tool"
+    CAPTION				= "yes"
+    APPLICATIONNAME		= "InventoryDiscovery"
+	BORDER				= "normal"
+    MAXIMIZEBUTTON		= "yes"
+    MINIMIZEBUTTON		= "yes"
+    SYSMENU				= "yes"
+	BORDERSTYLE			= "normal"
+	WINDOWSTATE			= "normal"  
+	SHOWINTASKBAR		= "yes"
+    SINGLEINSTANCE		= "yes"
+    NAVIGABLE			= "yes"
+	SELECTION			= "no"
+	SCROLL				= "no"
+	SCROLLFLAT			= "no"
+	VERSION				= "1.4"
+	INNERBORDER			= "yes"
+	CONTEXTMENU			= "no"
+>
+
+<SCRIPT Language="VBscript">
+
+'--------
+'History
+'--------
+'
+'Date			Version		Author		Description
+'unk				1.0			D.Card		Initial creation and main functionality
+'15/11/2007		1.1			D.Card		Added AES class and xml routines - probably need to add attribute read/write as well
+'xx/xx/2007		1.2			D.Card		Ouput to xml implemented - version updated retrospecitvely 13/11/2011
+'14/11/2012		1.3			D.Card		addding in P2V relevent information gathering
+'14/11/2012		1.4			D.Card		changed name and re-added HBA detection (currently untested)
+'
+'
+'
+'
+'     
+DIM struser
+DIM Strpassword
+DIM oWMIConnObj
+DIM oWMIConnObjHBA 'added for HBA detection
+DIM strlocalcomputer
+DIM fso
+DIM Oreg
+DIM oWMIRegConnObj
+Dim arrgroups()
+Dim xmldom
+Dim objroot
+dim objsubroot
+Dim strtargetfile
+dim objchildroot
+
+Const ForReading = 1
+Const ForWriting = 2
+Const ForAppending = 8
+Const TristateTrue = -1
+Const TristateFalse = 0
+
+'########################################################
+'ENCRYPTION BITS
+'########################################################
+Dim sServerName, oBase64, oAES, sUserName, sPassword, blConnected
+		Const cVersteckteSchlussel = "$%RTYVFE$%7khgfr%"
+		Set oBase64 = new ClsBase64
+		Set oAES = new ClsAES
+
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set objNetwork = CreateObject("WScript.Network")
+'Connect to XMLDOM Object
+Set XmlDom = CreateObject("Microsoft.XMLDOM")
+strlocalcomputer = objnetwork.ComputerName
+strlocaluser = objnetwork.UserDomain & "\" & objnetwork.Username
+
+'get username and password info
+strxmlfile = "configuration.xml"
+strUser = ReadXML(strxmlfile,"username")
+strPassword = ReadXML(strxmlfile,"password")
+
+Function SearchExecute
+
+If document.Domain_form.DomainList.value = "Select Domain" Then
+msgbox "Please Select a domain."
+Exit Function
+End If
+
+Call SearchAD
+
+End Function
+
+Function InventoryExecute
+'####################
+'Multi Target Mode
+'####################
+'need to write this function. 1) Check if filed is input. 2) does file exist? 3) open file and check for verification string. 4)Validate computer name and count total number, scan then recurse through all..
+
+
+strtargetfile = document.sysform.TargetFile.value
+
+if len(strtargetfile) > 1 and instr(strtargetfile,".")  Then
+'msgbox "Use input file!"
+
+if fso.FileExists(strtargetfile) Then
+'read the file
+'msgbox "File Found"
+
+if instr(lcase(strtargetfile),".xml") Then
+'msgbox "we have an xml file"
+else if instr(lcase(strtargetfile),".csv") or instr(lcase(strtargetfile),".txt") Then
+'msgbox "we have an csv or text file"
+
+Set objFile = FSO.OpenTextFile(strtargetfile, ForReading,TristateFalse)
+Do Until objFile.AtEndOfStream
+
+
+   strtarget = objFile.ReadLine
+'######################################################
+'cater for local username and passwords D. Card 14/12/2012
+'######################################################
+
+if instr(strtarget,",") Then
+
+arrstrtarget = split(strtarget,",")
+
+
+strtarget = arrstrtarget(0)
+strUser = arrstrtarget(1)
+strPassword = arrstrtarget(2)
+
+UpdateConsole(strtarget)
+Call ScanTarget(strtarget)
+
+
+end if
+
+  UpdateConsole(strtarget)
+Call ScanTarget(strtarget)
+
+Loop
+objFile.Close
+else
+msgbox "File type not supported"
+Exit Function
+End If
+End If
+exit function
+else
+msgbox "Input file not found."
+Exit Function
+End If
+
+
+
+End If
+
+
+
+'####################
+'Single Target Mode
+'####################
+strtarget = document.sysform.compname.value
+
+If strtarget = "" Then
+msgbox("Please Enter a computer to scan.")
+Exit Function
+else
+Call ScanTarget(strtarget)
+End If
+
+End Function
+
+
+
+
+
+
+
+
+
+
+
+
+Function ScanTarget(strtarget)
+'Check Target can be pinged
+ping_status = WMIPING(strtarget)
+
+If ping_status <> True Then
+Call updateconsole("Unable to ping target: " & strtarget)
+exit function
+else
+Call updateconsole("Sucessfull Ping to: " & strtarget)
+
+strtargetfile = strtarget & ".xml"
+
+str_checker = VerifyFile(strtargetfile)
+if str_checker = TRUE then
+Call XMLLoad("Inventory")
+else
+Call DefineXML("Inventory")
+End if
+
+Call writexml("Computername",strtarget)
+'Call CreateRootElem("Network")
+'Call CreateChildElem("nic","")
+'Call CreateSubChildElem("make","3com")
+'Call CreateSubChildElem("ip","192.168.2.13")
+
+'Call CreateChildElem("nic","")
+'Call CreateSubChildElem("make","Intel")
+'Call CreateSubChildElem("ip","192.168.0.99")
+Call Sleep
+End If
+Call Sleep
+Result = RemoteWMIConnect(strtarget)
+Call updateconsole("Connect Status = " & Result)
+If result <> FALSE Then
+'GO GO GO
+
+if document.sysform.C1.checked Then
+'Perform Hardware Inventory
+Call GetComputerSystem
+Call Sleep
+Call GetSystemSerial
+Call Sleep
+Call GetChassisType
+Call Sleep
+Call GetIPInformation
+Call Sleep
+Call GetCPUInfo
+Call Sleep
+Call GetDriveInfo
+Call Sleep
+Call GetHBAinfo
+Call Sleep
+
+
+End If
+If document.sysform.C2.checked Then
+'Perform Software Inventory
+Call GetAddRemoveData
+Call Sleep
+End If
+
+
+UpdateConsole("Inventory Complete.")
+
+else
+
+UpdateConsole("Failed to connect to remote client.")
+exit function
+
+End If
+
+End function
+
+Function updateconsole(logstr)
+on error resume next
+Set outputfile = FSO.OpenTextFile("log.txt", ForAppending, True,TristateFalse)
+outputfile.writeline(NOW & "," & logstr) 
+document.getElementById("log").innerHTML = NOW & ": " & logstr & vbcrlf & "<BR>" & document.getElementById("log").innerHTML
+outputfile.close
+End Function
+
+'##############################
+'WMI FUNCTIONS
+'##############################
+
+Function WMIPING(strtarget)
+WMIPING = FALSE
+
+Set localobjWMIService = GetObject("winmgmts:\\.\root\cimv2")
+Set colItems = localobjWMIService.ExecQuery _
+    ("Select * from Win32_PingStatus " & _
+        "Where Address = '" & strtarget & "'")
+For Each objItem in colItems
+    If objItem.StatusCode = 0 Then 
+        WMIPING = TRUE
+       
+    End If
+Next
+
+End Function
+
+
+Function RemoteWMIConnect(str_rem_server)
+ON ERROR RESUME NEXT
+                Set oWbemLocator = CreateObject("WbemScripting.SWbemLocator")
+                             
+              
+                Set oWMIConnObj = oWbemLocator.ConnectServer(str_rem_server, "root\cimv2", struser, strpassword)
+                Set oWMIRegConnObj = oWbemLocator.ConnectServer(str_rem_server, "root\DEFAULT", struser, strpassword)
+                Set oWMIConnObjHBA = oWbemLocator.ConnectServer(str_rem_server, "root\wmi", struser, strpassword)
+
+If Err = -2147217308 Then
+Err.Clear
+Set oWMIConnObj = oWbemLocator.ConnectServer(str_rem_server, "root\cimv2")
+Set oWMIRegConnObj = oWbemLocator.ConnectServer(str_rem_server, "root\DEFAULT")
+    Set oWMIConnObjHBA = oWbemLocator.ConnectServer(str_rem_server, "root\wmi")
+else
+
+End If
+ON ERROR GOTO 0
+
+
+set oreg = oWMIRegConnObj.Get("StdRegProv")
+
+IF Err then
+RemoteWMIConnect = FALSE
+else
+RemoteWMIConnect = TRUE
+End If
+Err.Clear
+ON ERROR GOTO 0
+
+End Function
+
+Function RemoteExecuteCMD(strCMDLine)
+'ON ERROR RESUME NEXT
+                                Dim oNewProcess, intProcessID
+                                Set oNewProcess = oWMIConnObj.Get("Win32_Process")
+                                
+                                RemoteExecuteCMD = oNewProcess.Create(strCMDLine, Null, Null, intProcessID)
+                                If Err then
+                                RemoteExecuteCMD = FALSE
+                                End IF
+End Function
+
+Function RemoteFolderExists(sFolderName)
+                'On error Resume Next
+                Dim colFolders
+                sfoldername = FixFolderNameForWMI(sFolderName)
+                Set colFolders = oWMIConnObj.ExecQuery("Select * From Win32_Directory Where Name = '" & sFolderName & "'")
+                RemoteFolderExists = False
+                If Err then
+
+                else
+                                RemoteFolderExists = colfolders.count
+                                
+                                                
+                End If
+                
+End Function
+
+Function FixFolderNameForWMI(sIn)
+                                FixFolderNameForWMI = Replace(sIn, "\", "\\")
+End Function
+
+   Function Check_State
+   window.resizeTo 800,750
+   'Check Radio Button and resize window
+   If Document.Form1.R1.checked Then
+
+   Call Click_Domain
+
+   end if
+   
+   If Document.Form1.R2.checked Then
+   Call Click_System
+   End If
+   
+   End Function
+   
+   Function Click_Domain
+   ON ERROR RESUME NEXT
+   Document.Form1.R2.checked = FALSE
+   Document.Form1.R3.checked = FALSE
+   showElement("Domain")
+   hideElement("System")
+   hideElement("Scanner")
+   Call GetDomainList 'populate the domain listbox
+   End Function
+   
+   Function Click_System
+   ON ERROR RESUME NEXT
+      Document.Form1.R1.checked = FALSE
+      Document.Form1.R3.checked = FALSE
+      showElement("System")
+   hideElement("Domain")
+   hideElement("Scanner")
+   End Function
+
+   Function Click_Scanner
+   ON ERROR RESUME NEXT
+      Document.Form1.R1.checked = FALSE
+       Document.Form1.R2.checked = FALSE
+      showElement("Scanner")
+   hideElement("Domain")
+    hideElement("System")
+   End Function
+
+   Function hideElement(sName)
+		Dim oElment
+		Set oElment = Document.getElementById(sName)
+		If Typename(oElment) <> "Nothing" then
+			oElment.Style.display = "none"
+		Else
+			Call updateconsole("hideElement: Element '" & sName & "' not found.")
+		End If
+	End Function
+
+Function showElement(sName)
+		Dim oElment
+		Set oElment = Document.getElementById(sName)
+		If Typename(oElment) <> "Nothing" then
+			oElment.Style.display = "block"
+		Else
+			Call updateconsole("showElement: Element '" & sName & "' not found.")
+		End If
+	End Function
+	
+	
+	
+	Function GetComputerSystem
+	ON ERROR RESUME NEXT
+	Set colItems = oWMIConnObj.ExecQuery("SELECT * FROM Win32_ComputerSystem", "WQL", _
+                                          wbemFlagReturnImmediately + wbemFlagForwardOnly)
+                                          
+
+
+   For Each objItem In colItems
+  
+         Call updateconsole("Description: " & objItem.Description)
+      		Call writexml("Description",objItem.Description)
+      Call updateconsole("Domain: " & objItem.Domain)
+      		Call writexml("Domain",objItem.Domain)
+      Call updateconsole("Manufacturer: " & objItem.Manufacturer)
+      		Call writexml("Manufacturer",objItem.Manufacturer)
+      Call updateconsole("Model: " & objItem.Model)
+      		 Call writexml("Model",objItem.Model)
+      Call updateconsole("Name: " & objItem.Name)
+      		Call writexml("Name",objItem.Name)    
+      Call updateconsole("NumberOfLogicalProcessors: " & objItem.NumberOfLogicalProcessors)
+      		Call writexml("NumberOfLogicalProcessors",objItem.NumberOfLogicalProcessors)
+      Call updateconsole("NumberOfProcessors: " & objItem.NumberOfProcessors)
+      		Call writexml("NumberOfProcessors",objItem.NumberOfProcessors)
+      Call updateconsole("SystemType: " & objItem.SystemType)
+      		Call writexml("SystemType",objItem.SystemType)
+      memsize = (((objItem.TotalPhysicalMemory / 1024)/ 1024) /1024)
+           
+           memsize = Round(memsize)      
+      Call updateconsole("TotalPhysicalMemory: " & memsize & "Gb")
+      		Call writexml("TotalPhysicalMemory",memsize & "Gb")
+      Call updateconsole("UserName: " & objItem.UserName)
+      		 Call writexml("UserName",objItem.UserName)
+    
+   Next
+    	
+	End Function
+
+
+
+	
+	Function GetSystemSerial
+	
+Set colItems = oWMIConnObj.ExecQuery("SELECT * FROM Win32_BaseBoard", "WQL", _
+                                          wbemFlagReturnImmediately + wbemFlagForwardOnly)
+
+   For Each objItem In colItems
+     Call UpdateConsole("Motherboard SerialNumber: " & objItem.SerialNumber)
+     Call writexml("MotherboardSerialNumber",objItem.SerialNumber)
+        Next
+
+	
+	End Function
+	
+	
+    Function GetHBAinfo
+     On Error Resume Next
+    Err.Clear
+    Set colItems = oWMIConnObjHBA.ExecQuery("Select * from MSFC_FCAdapterHBAAttributes", "WQL", _
+                                          wbemFlagReturnImmediately + wbemFlagForwardOnly)
+   
+    test = ubound(colitems)
+
+    If Err then
+    Call UpdateConsole("Unable to detect HBA")
+    else
+
+   For Each objItem In colItems
+     Call UpdateConsole("HBAActive: " & objItem.Active)
+     Call writexml("Active",objItem.Active)
+        Next
+
+    end if
+
+   
+
+
+    End Function
+
+	
+
+	
+	
+Function GetChassisType
+
+ Set colItems = oWMIConnObj.ExecQuery("SELECT * FROM Win32_SystemEnclosure", "WQL", _
+                                          wbemFlagReturnImmediately + wbemFlagForwardOnly)
+                                          
+For Each objItem In colItems
+
+   
+    	Call UpdateConsole("Serial Number: " & objitem.SerialNumber)
+    			Call writexml("serialnumber",objitem.SerialNumber)
+    	
+    	strChassisTypes = Join(objItem.ChassisTypes, ",")
+       
+
+select case strChassisTypes
+
+ case "1"
+  Call UpdateConsole("Chassis Type:1 Other" )
+  Call writexml("chasistype","1")
+
+ case "2"
+    Call UpdateConsole("Chassis Type:2 Unknown" )
+    Call writexml("chasistype","2")
+ case "3"
+    Call UpdateConsole("Chassis Type:3 Desktop" )
+    Call writexml("chasistype","3")
+case "4"
+ Call UpdateConsole("Chassis Type:4  Low Profile Desktop" )
+ Call writexml("chasistype","4")
+ case "5"
+  Call UpdateConsole("Chassis Type:5 Pizza Box" )
+Call writexml("chasistype","5")
+  case "6"
+   Call UpdateConsole("Chassis Type:6 Mini Tower" )
+   Call writexml("chasistype","6")
+   case "7"
+    Call UpdateConsole("Chassis Type:7 Tower" )
+    Call writexml("chasistype","7")
+    case "8"
+     Call UpdateConsole("Chassis Type:8 Portable" )
+     Call writexml("chasistype","8")
+     case "9"
+      Call UpdateConsole("Chassis Type:9 Laptop" )
+      Call writexml("chasistype","9")
+      case "10"
+       Call UpdateConsole("Chassis Type:10 Notebook" )
+       Call writexml("chasistype","10")
+       case "11"
+        Call UpdateConsole("Chassis Type:11 Hand Held" )
+        Call writexml("chasistype","11")
+        case "12"
+         Call UpdateConsole("Chassis Type:12 Docking Station" )
+        Call writexml("chasistype","12")
+         case "13"
+          Call UpdateConsole("Chassis Type:13 All in One" )
+          Call writexml("chasistype","13")
+          case "14"
+           Call UpdateConsole("Chassis Type:14 Sub Notebook" )
+           Call writexml("chasistype","14")
+           case "15"
+            Call UpdateConsole("Chassis Type:15 Space-Saving" )
+            Call writexml("chasistype","15")
+            case "16"
+             Call UpdateConsole("Chassis Type:16 Lunch Box" )
+             Call writexml("chasistype","16")
+ 
+  case "17"
+             Call UpdateConsole("Chassis Type:17 Main System Chassis" )
+             Call writexml("chasistype","17")
+              
+  case "18"
+             Call UpdateConsole("Chassis Type:18 Expansion Chassis" )
+             Call writexml("chasistype","18")
+ case "19"
+             Call UpdateConsole("Chassis Type:19 SubChassis" )
+             Call writexml("chasistype","19")
+ case "20"
+             Call UpdateConsole("Chassis Type:20 Bus Expansion Chassis" )
+             Call writexml("chasistype","20")
+ case "21"
+             Call UpdateConsole("Chassis Type:21 Peripheral Chassis" )
+             Call writexml("chasistype","21")
+ case "22"
+             Call UpdateConsole("Chassis Type:22 Storage Chassis" )
+             Call writexml("chasistype","22")
+ case "23"
+             Call UpdateConsole("Chassis Type:23 Rack Mount Chassis" )
+             Call writexml("chasistype","23")
+
+ case "24"
+             Call UpdateConsole("Chassis Type:24 Sealed-Case PC" )
+             Call writexml("chasistype","24")
+
+end select    
+
+        
+   
+Next
+
+
+
+End Function
+
+
+Function GetCPUInfo
+Set colItems = oWMIConnObj.ExecQuery("SELECT * FROM Win32_Processor", "WQL", _
+                                          wbemFlagReturnImmediately + wbemFlagForwardOnly)
+
+
+
+
+Call CreateRootElem("Processors")
+   For Each objItem In colItems
+   
+ON ERROR RESUME NEXT
+
+Call CreateChildElem("CPU","")
+Call CreateSubChildElem("deviceID",objItem.DeviceID)
+Call CreateSubChildElem("name",objItem.Name)
+Call CreateSubChildElem("Manufacturer" , objItem.Manufacturer)
+Call CreateSubChildElem("MaxClockSpeed" , objItem.MaxClockSpeed)
+Call CreateSubChildElem("NumberOfCores" , objItem.NumberOfCores)
+
+      Call UpdateConsole("DeviceID: " & objItem.DeviceID)
+   Call UpdateConsole("Name: " & objItem.Name)
+   Call UpdateConsole("Manufacturer: " & objItem.Manufacturer)
+   Call UpdateConsole("MaxClockSpeed: " & objItem.MaxClockSpeed)
+   ON ERROR RESUME NEXT
+   'Need to disable error checking as some cpu's dont support wmi core check....
+   Call UpdateConsole("NumberOfCores: " & objItem.NumberOfCores)
+   Err.Clear
+   ON ERROR GOTO 0   
+
+   Next
+   
+
+End Function
+
+Function GetDriveInfo
+
+ Set colItems = oWMIConnObj.ExecQuery("SELECT * FROM Win32_LogicalDisk where description = 'Local Fixed Disk'", "WQL", _
+                                          wbemFlagReturnImmediately + wbemFlagForwardOnly)
+Call CreateRootElem("Drives")
+   For Each objItem In colItems
+   
+Call CreateChildElem("Drive","")
+      Call UpdateConsole( "Compressed: " & objItem.Compressed)
+      		Call CreateSubChildElem("Compressed",objItem.Compressed)
+      Call UpdateConsole( "Description: " & objItem.Description)
+      		Call CreateSubChildElem("description",objItem.Description)
+      Call UpdateConsole( "DeviceID: " & objItem.DeviceID)
+      		Call CreateSubChildElem("deviceID",objItem.DeviceID)
+      Call UpdateConsole( "DriveType: " & objItem.DriveType)
+      		Call CreateSubChildElem("drivetype",objItem.DriveType)
+      Call UpdateConsole( "FileSystem: " & objItem.FileSystem)
+      		Call CreateSubChildElem("deviceID",objItem.DeviceID)
+      
+      strfreespace = (((objItem.FreeSpace /1024) / 1024) /1024)
+     strfreespace = Round(strfreespace)
+      Call UpdateConsole( "FreeSpace: " & strfreespace & "Gb")
+      		Call CreateSubChildElem("freespace",strfreespace)
+      Call UpdateConsole( "MediaType: " & objItem.MediaType)
+      		Call CreateSubChildElem("mediatype",objItem.MediaType)
+      Call UpdateConsole( "Name: " & objItem.Name)
+      		Call CreateSubChildElem("name",objItem.Name)
+          strspace = (((objItem.size /1024) / 1024) /1024)
+     strspace = Round(strspace)
+      Call UpdateConsole( "Size: " & strspace & "Gb")
+      		Call CreateSubChildElem("size",strspace)
+      Call UpdateConsole( "Status: " & objItem.Status)
+      		'Call CreateSubChildElem("Status",objItem.Status)
+
+    strvolume = strspace - strfreespace
+    Call UpdateConsole( "Data Volume: " & strvolume & "Gb")
+      		Call CreateSubChildElem("volume",strvolume)
+
+
+    Next
+
+End Function
+	
+	
+Function GetIPInformation
+	
+	
+Set colItems = oWMIConnObj.ExecQuery _
+    ("Select * From Win32_NetworkAdapterConfiguration Where IPEnabled = True")
+Call CreateRootElem("network")
+
+
+For Each objItem in colItems
+stradapter = objitem.Description
+    arrIPAddresses = objItem.IPAddress
+   
+    if vartype(objItem.DefaultIPGateway(0)) = 8 Then
+    strDefaultIPGateway = Join(objitem.DefaultIPGateway,".")
+    End If
+         strIPSubnet = Join(objItem.IPSubnet, ",")
+       
+ For Each strAddress in arrIPAddresses
+    
+  
+     'UpdateConsole("IP = " & strAddress )
+            strMACAddress = objItem.MacAddress
+            Call GetIPNetID(strMACAddress,strAddress,strIPSubnet,strDefaultIPGateway,stradapter)
+
+    Next
+Next
+	
+End Function	
+	
+    	
+Function GetIPNetID(strMACAddress,strAddress,strIPSubnet,strDefaultIPGateway,stradapter)
+Set colItems = oWMIConnObj.ExecQuery _
+    ("Select * From Win32_NetworkAdapter Where MACAddress = '" & strMACAddress & "'")
+
+
+
+For Each objItem in colItems
+    If Not IsNull(objItem.NetConnectionID) Then
+      if instr(straddress,"::") Then
+        'do nothing, no iP 6 support yet
+        else
+        
+    Call CreateChildElem("nic","")
+        UpdateConsole"Network Connection " & objItem.NetConnectionID & " IP = " & strAddress & ", Subnet: " & strIPSubnet & ", Gateway:" & strDefaultIPGateway & ", Adapter: " & stradapter
+        
+      
+        
+        Call CreateSubChildElem("ID",objItem.NetConnectionID)
+        Call CreateSubChildElem("IP",strAddress)
+        Call CreateSubChildElem("Subnet",stripsubnet)
+        Call CreateSubChildElem("gateway",strDefaultIPGateway)
+        Call CreateSubChildElem("adapter",stradapter)
+     
+
+		End If
+
+    End If
+Next
+End Function
+
+Function GetDomainList
+counter = document.Domain_form.DomainList.length
+'use 1 as default is 'select domain'
+for i = 1 to counter
+document.Domain_form.DomainList.Remove(i)
+Next
+
+set objRootDSE = GetObject("LDAP://RootDSE")
+strADsPath =  "<GC://" & objRootDSE.Get("rootDomainNamingContext") & ">;"
+strFilter  = "(objectcategory=domainDNS);"
+strAttrs   = "name,adspath;"
+strScope   = "SubTree"
+
+set objConn = CreateObject("ADODB.Connection")
+objConn.Provider = "ADsDSOObject"
+objConn.Open "Active Directory Provider"
+set objRS = objConn.Execute(strADsPath & strFilter & strAttrs & strScope)
+objRS.MoveFirst
+i = 0
+Do while Not objRS.EOF
+
+'Set objOption = document.createElement("OPTION")
+
+set objOption = document.createElement("OPTION")
+
+
+str_fqdn = split(objRS.Fields(1).Value,",")
+
+for each object in str_fqdn
+
+If instr(lcase(object),"dc=") Then
+if i = 0 Then
+else
+count = len(object) - 3
+dns = right(object,count)
+
+dns = "." & dns
+End If
+End if
+i = i + 1
+Next
+objoption.Text = objRS.Fields(0).Value & dns
+objoption.Value = objRS.Fields(1).Value
+
+
+document.Domain_form.DomainList.add(objoption)   
+
+
+    objRS.MoveNext
+Loop
+
+
+End Function
+	
+	
+Function GetAddRemoveData
+
+Const HKCR = &H80000000
+Const HKCU = &H80000001
+Const HKLM = &H80000002
+
+'Set oReg = GetObject("winmgmts:{impersonationLevel=impersonate}!\\" &_
+'   strcomputer & "\root\default:StdRegProv")
+
+'Set oREG = oWMIConnObj.Get("StdRegProv")
+
+
+sUninstallPath = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+
+oReg.EnumKey HKLM, sUninstallPath, aSubkeys
+Count = 0
+On Error Resume Next
+
+Createrootelem("Software")
+
+For Each sSubkey In aSubkeys
+
+   oReg.GetStringValue HKLM, sUninstallPath &"\" &_
+      sSubkey, "DisplayName", sAppName
+  
+
+   oReg.GetStringValue HKLM, sUninstallPath &"\" &_
+      sSubkey, "DisplayVersion", SappVersion
+
+
+    oReg.GetStringValue HKLM, sUninstallPath &"\" &_
+      sSubkey, "Publisher", SappPublisher
+
+If sAppName <> "" Then
+if instr(lcase(sAppName),"(kb") or instr(sAppName,"KB") Then
+'do not grab as hotfix
+else
+count = count + 1
+
+UpdateConsole(sAppName & ", " & sAppVersion & ", " & SappPublisher)
+
+Call CreateChildElem("product","")
+Call createsubchildelem("title",sAppName)
+Call createsubchildelem("version",sAppVersion)
+Call createsubchildelem("publisher",SappPublisher)
+Call Sleep
+End If
+End If
+Next
+
+UpdateConsole("Found : " & count  & " Products registered in add/remove programs excluding Microsoft Hotfixes.")
+
+End Function	
+	
+Function SearchAD
+
+' Determine DNS domain name. Use server binding and alternate
+' credentials. The value of strDNSDomain can also be hard coded.
+
+Set objNS = GetObject("LDAP:")
+Set objRootDSE = objNS.OpenDSObject("LDAP://RootDSE", _
+   strUser, strPassword, _
+ADS_SERVER_BIND Or ADS_SECURE_AUTHENTICATION)
+
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+
+
+If document.Domain_form.OUlist.value = "Domain" Then
+count = len(document.Domain_form.DomainList.value) - 5
+strdnsdomain = right(document.Domain_form.DomainList.value,count)
+else
+
+count = len(document.Domain_form.oulist.value) - 7
+strdnsdomain = right(document.Domain_form.oulist.value,count)
+End If
+
+
+
+
+
+
+' Use ADO to search Active Directory.
+
+' Use alternate credentials.
+Set objCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Properties("User ID") = strUser
+adoConnection.Properties("Password") = strPassword
+adoConnection.Properties("Encrypt Password") = True
+adoConnection.Properties("ADSI Flag") = ADS_SERVER_BIND 
+adoConnection.Properties("ADSI Flag") = ADS_SECURE_AUTHENTICATION
+
+adoConnection.Open "Active Directory Provider"
+
+objCommand.ActiveConnection = adoConnection
+
+' Search entire domain. Use server binding.
+
+updateconsole(strbase)
+' Search filter
+
+If document.Domain_form.objtype(0).Checked Then
+'User
+str_type = "user"
+'not disabled = (userAccountControl:1.2.840.113556.1.4.803:=2)
+strFilter = "(&(objectCategory=user)(!userAccountControl:1.2.840.113556.1.4.803:=2))"
+else If document.Domain_form.objtype(1).Checked Then
+'group
+str_type = "group"
+strFilter = "(&(objectCategory=group))"
+
+Else If document.Domain_form.objtype(2).Checked THen
+'computer
+str_type = "computer"
+strFilter = "(&(objectCategory=computer))"
+else if document.Domain_form.objtype(3).Checked THen
+'organizationalUnit
+str_type = "organizationalUnit"
+strFilter = "(&(objectCategory=organizationalUnit))"
+Else
+msgbox "Please select an object type"
+Exit function
+End If
+End if
+End If 
+End IF
+
+
+' Comma delimited list of attribute values to retrieve.
+strAttributes = "adspath,givenname,displayname,name,ou,scriptpath,cn,sAMAccountName"
+
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+' Construct the LDAP query.
+strQuery = strbase & ";" & strFilter & ";" & strAttributes & ";subtree"
+'work out if we are searching at root or ou level
+
+
+' Run the query.
+record_count = 0
+
+objCommand.CommandText = strQuery
+objCommand.Properties("Page Size") = 500
+objCommand.Properties("Timeout") = 60
+objCommand.Properties("Cache Results") = False
+
+
+' Enumerate the resulting recordset.
+'ON ERROR RESUME NEXT
+Set adoRecordset = objCommand.Execute
+
+'Lets make the time and date fit the windows file format!
+strdate = date
+
+strdatearray = split(strdate,"/")
+
+strdate = join(strdatearray,"-")
+
+strtime = time
+
+
+strtimearray = split(strtime,":")
+
+strtime = join(strtimearray,"-")
+
+strtime = replace(strtime," ","")
+
+Set outputfile = fso.CreateTextFile(str_type & strdate & strtime & ".txt", True,FALSE)
+Do Until adoRecordset.EOF
+record_count = record_count + 1
+UpdateConsole(adorecordset.Fields("name").Value)
+
+
+ 
+'UpdateConsole(adorecordset.Fields("displayname").Value)
+'UpdateConsole(adorecordset.Fields("cn").Value)
+
+str_object = adorecordset.Fields("ADSPATH").Value
+'UpdateConsole(adorecordset.Fields("ADSPATH").Value)
+
+
+If str_type = "user" Then
+c = 0
+
+reDim arrgroups(0)
+
+
+Set objNS = GetObject("LDAP:")
+Set objuser = objNS.OpenDSObject(str_object, _
+    strUser, strPassword, _
+    ADS_SECURE_AUTHENTICATION)
+
+    
+for each group in objuser.groups
+
+redim preserve arrgroups(c)
+
+arrgroups(c) = group.CN
+   'UpdateConsole("Group:" & group.CN)
+c = c + 1
+Next
+
+csvgroups = join(arrgroups,",")
+
+outputfile.WriteLine(adorecordset.Fields("name").Value & "," & csvgroups)
+
+else
+outputfile.WriteLine(adorecordset.Fields("name").Value)
+End If
+
+
+
+
+Call Sleep
+adoRecordset.MoveNext
+Loop
+
+' Clean up.
+adoRecordset.Close
+adoConnection.Close
+outputfile.Close
+
+updateconsole("Search Returned " & record_count & " Records.")
+msgbox "Created output file: " & str_type & strdate & strtime & ".txt",vbokonly,"File Created"
+
+End Function
+	
+	
+	
+	Function ListOU
+
+
+
+	
+For Each objOption in document.Domain_form.OUlist.options
+
+        If objOption.Value <> "Domain" Then
+            objOption.RemoveNode
+            
+        End If
+    Next
+ 
+
+If document.Domain_form.DomainList.value = "Select Domain" Then
+
+exit function
+End If 
+
+	' Determine DNS domain name. Use server binding and alternate
+' credentials. The value of strDNSDomain can also be hard coded.
+
+Set objNS = GetObject("LDAP:")
+Set objRootDSE = objNS.OpenDSObject("LDAP://RootDSE", _
+   strUser, strPassword, _
+ADS_SERVER_BIND Or ADS_SECURE_AUTHENTICATION)
+
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use ADO to search Active Directory.
+
+' Use alternate credentials.
+Set objCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Properties("User ID") = strUser
+adoConnection.Properties("Password") = strPassword
+adoConnection.Properties("Encrypt Password") = True
+adoConnection.Properties("ADSI Flag") = ADS_SERVER_BIND 
+adoConnection.Properties("ADSI Flag") = ADS_SECURE_AUTHENTICATION
+
+adoConnection.Open "Active Directory Provider"
+
+objCommand.ActiveConnection = adoConnection
+
+' Search entire domain. Use server binding.
+
+updateconsole(strbase)
+' Search filter
+
+'organizationalUnit
+strFilter = "(&(objectCategory=organizationalUnit))"
+
+' Comma delimited list of attribute values to retrieve.
+strAttributes = "adspath,displayname,name,cn"
+
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+' Construct the LDAP query.
+strQuery = strbase & ";" & strFilter & ";" & strAttributes & ";subtree"
+'work out if we are searching at root or ou level
+
+' Run the query.
+objCommand.CommandText = strQuery
+objCommand.Properties("Page Size") = 500
+objCommand.Properties("Timeout") = 60
+objCommand.Properties("Cache Results") = False
+
+
+' Enumerate the resulting recordset.
+'ON ERROR RESUME NEXT
+Set adoRecordset = objCommand.Execute
+
+Do Until adoRecordset.EOF
+
+'add the ou list to the listbox ou
+
+Set objOption = document.createElement("OPTION")
+
+objoption.Text = adorecordset.Fields("name").Value
+objoption.Value = adorecordset.Fields("adspath").Value
+
+
+document.Domain_form.OUList.add(objoption)   
+
+UpdateConsole(adorecordset.Fields("displayname").Value)
+
+UpdateConsole(adorecordset.Fields("ADSPATH").Value)
+
+adoRecordset.MoveNext
+Loop
+
+' Clean up.
+adoRecordset.Close
+adoConnection.Close
+
+End Function
+
+Function Sleep
+        Set objShell = CreateObject("Wscript.Shell")
+        objShell.Run "sleep.vbs",1,TRUE
+End Function
+
+
+' ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+' Class for Base 64 converstion
+' ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+	Class ClsBase64
+		Function Encode(inData)
+			'Antonin Foller, Motobit Software, http://Motobit.cz
+			Const Base64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+			Dim cOut, sOut, I
+			
+			'For each group of 3 bytes
+			For I = 1 To Len(inData) Step 3
+				Dim nGroup, pOut, sGroup
+				
+				'Create one long from this 3 bytes.
+				nGroup = &H10000 * Asc(Mid(inData, I, 1)) + _
+					&H100 * MyASC(Mid(inData, I + 1, 1)) + MyASC(Mid(inData, I + 2, 1))
+				
+				'Oct splits the long To 8 groups with 3 bits
+				nGroup = Oct(nGroup)
+				
+				'Add leading zeros
+				nGroup = String(8 - Len(nGroup), "0") & nGroup
+				
+				'Convert To base64
+				pOut = Mid(Base64, CLng("&o" & Mid(nGroup, 1, 2)) + 1, 1) + _
+				Mid(Base64, CLng("&o" & Mid(nGroup, 3, 2)) + 1, 1) + _
+				Mid(Base64, CLng("&o" & Mid(nGroup, 5, 2)) + 1, 1) + _
+				Mid(Base64, CLng("&o" & Mid(nGroup, 7, 2)) + 1, 1)
+				
+				'Add the part To OutPut string
+				sOut = sOut + pOut
+				
+				'Add a new line For Each 76 chars In dest (76*3/4 = 57)
+				'If (I + 2) Mod 57 = 0 Then sOut = sOut + vbCrLf
+			Next
+				
+			Select Case Len(inData) Mod 3
+				Case 1: '8 bit final
+					sOut = Left(sOut, Len(sOut) - 2) + "=="
+				Case 2: '16 bit final
+					sOut = Left(sOut, Len(sOut) - 1) + "="
+			End Select
+			Encode = sOut
+		End Function
+
+		Private Function MyASC(OneChar)
+			If OneChar = "" Then MyASC = 0 Else MyASC = Asc(OneChar)
+		End Function
+
+		Function Decode(ByVal base64String)
+			'Antonin Foller, Motobit Software, http://Motobit.cz
+			Const Base64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+			Dim dataLength, sOut, groupBegin
+  
+			'remove white spaces, If any
+			base64String = Replace(base64String, vbCrLf, "")
+			base64String = Replace(base64String, vbTab, "")
+			base64String = Replace(base64String, " ", "")
+  
+			'The source must consists from groups with Len of 4 chars
+			dataLength = Len(base64String)
+			If dataLength Mod 4 <> 0 Then
+				Err.Raise 1, "Base64.Decode", "Bad Base64 string."
+				Exit Function
+			End If
+				
+			' Now decode each group:
+			For groupBegin = 1 To dataLength Step 4
+				Dim numDataBytes, CharCounter, thisChar, thisData, nGroup, pOut
+				' Each data group encodes up To 3 actual bytes.
+				numDataBytes = 3
+				nGroup = 0
+				
+				For CharCounter = 0 To 3
+					' Convert each character into 6 bits of data, And add it To
+					' an integer For temporary storage.  If a character is a '=', there
+					' is one fewer data byte.  (There can only be a maximum of 2 '=' In
+					' the whole string.)
+					
+					thisChar = Mid(base64String, groupBegin + CharCounter, 1)
+					
+					If thisChar = "=" Then
+						numDataBytes = numDataBytes - 1
+						thisData = 0
+					Else
+						thisData = InStr(1, Base64, thisChar, vbBinaryCompare) - 1
+					End If
+					If thisData = -1 Then
+						Err.Raise 2, "Base64Decode", "Bad character In Base64 string."
+						Exit Function
+					End If
+					
+					nGroup = 64 * nGroup + thisData
+				Next
+					
+				'Hex splits the long To 6 groups with 4 bits
+				nGroup = Hex(nGroup)
+					
+				'Add leading zeros
+				nGroup = String(6 - Len(nGroup), "0") & nGroup
+					
+				'Convert the 3 byte hex integer (6 chars) To 3 characters
+				pOut = Chr(CByte("&H" & Mid(nGroup, 1, 2))) + _
+				Chr(CByte("&H" & Mid(nGroup, 3, 2))) + _
+				Chr(CByte("&H" & Mid(nGroup, 5, 2)))
+				
+				'add numDataBytes characters To out string
+				sOut = sOut & Left(pOut, numDataBytes)
+			Next
+			
+			Decode = sOut
+		End Function
+	End Class
+
+' ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+' Class for Handling AES Encryption/Decryption
+' ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+	Class clsAES
+		'Option Explicit
+		' Rijndael.asp
+		' Copyright 2001 Phil Fresle
+		' phil@frez.co.uk
+		' http://www.frez.co.uk
+		' Implementation of the AES Rijndael Block Cipher. Inspired by Mike Scott's
+		' implementation in C. Permission for free direct or derivative use is granted
+		' subject to compliance with any conditions that the originators of the
+		' algorithm place on its exploitation.
+		' 3-Apr-2001: Functions added to the bottom for encrypting/decrypting large
+		' arrays of data. The entire length of the array is inserted as the first four
+		' bytes onto the front of the first block of the resultant byte array before
+		' encryption.
+		' 19-Apr-2001: Thanks to Paolo Migliaccio for finding a bug with 256 bit
+		' key. Problem was in the gkey function. Now properly matches NIST values.
+
+		Private m_lOnBits(30)
+		Private m_l2Power(30)
+		Private m_bytOnBits(7)
+		Private m_byt2Power(7)
+		
+		Private m_InCo(3)
+		
+		Private m_fbsub(255)
+		Private m_rbsub(255)
+		Private m_ptab(255)
+		Private m_ltab(255)
+		Private m_ftable(255)
+		Private m_rtable(255)
+		Private m_rco(29)
+
+		Private m_Nk
+		Private m_Nb
+		Private m_Nr
+		Private m_fi(23)
+		Private m_ri(23)
+		Private m_fkey(119)
+		Private m_rkey(119)
+
+		Private Sub SetupVars()
+			m_InCo(0) = &HB
+			m_InCo(1) = &HD
+			m_InCo(2) = &H9
+			m_InCo(3) = &HE
+			
+			m_bytOnBits(0) = 1
+			m_bytOnBits(1) = 3
+			m_bytOnBits(2) = 7
+			m_bytOnBits(3) = 15
+			m_bytOnBits(4) = 31
+			m_bytOnBits(5) = 63
+			m_bytOnBits(6) = 127
+			m_bytOnBits(7) = 255
+			
+			m_byt2Power(0) = 1
+			m_byt2Power(1) = 2
+			m_byt2Power(2) = 4
+			m_byt2Power(3) = 8
+			m_byt2Power(4) = 16
+			m_byt2Power(5) = 32
+			m_byt2Power(6) = 64
+			m_byt2Power(7) = 128
+			
+			m_lOnBits(0) = 1
+			m_lOnBits(1) = 3
+			m_lOnBits(2) = 7
+			m_lOnBits(3) = 15
+			m_lOnBits(4) = 31
+			m_lOnBits(5) = 63
+			m_lOnBits(6) = 127
+			m_lOnBits(7) = 255
+			m_lOnBits(8) = 511
+			m_lOnBits(9) = 1023
+			m_lOnBits(10) = 2047
+			m_lOnBits(11) = 4095
+			m_lOnBits(12) = 8191
+			m_lOnBits(13) = 16383
+			m_lOnBits(14) = 32767
+			m_lOnBits(15) = 65535
+			m_lOnBits(16) = 131071
+			m_lOnBits(17) = 262143
+			m_lOnBits(18) = 524287
+			m_lOnBits(19) = 1048575
+			m_lOnBits(20) = 2097151
+			m_lOnBits(21) = 4194303
+			m_lOnBits(22) = 8388607
+			m_lOnBits(23) = 16777215
+			m_lOnBits(24) = 33554431
+			m_lOnBits(25) = 67108863
+			m_lOnBits(26) = 134217727
+			m_lOnBits(27) = 268435455
+			m_lOnBits(28) = 536870911
+			m_lOnBits(29) = 1073741823
+			m_lOnBits(30) = 2147483647
+			
+			m_l2Power(0) = 1
+			m_l2Power(1) = 2
+			m_l2Power(2) = 4
+			m_l2Power(3) = 8
+			m_l2Power(4) = 16
+			m_l2Power(5) = 32
+			m_l2Power(6) = 64
+			m_l2Power(7) = 128
+			m_l2Power(8) = 256
+			m_l2Power(9) = 512
+			m_l2Power(10) = 1024
+			m_l2Power(11) = 2048
+			m_l2Power(12) = 4096
+			m_l2Power(13) = 8192
+			m_l2Power(14) = 16384
+			m_l2Power(15) = 32768
+			m_l2Power(16) = 65536
+			m_l2Power(17) = 131072
+			m_l2Power(18) = 262144
+			m_l2Power(19) = 524288
+			m_l2Power(20) = 1048576
+			m_l2Power(21) = 2097152
+			m_l2Power(22) = 4194304
+			m_l2Power(23) = 8388608
+			m_l2Power(24) = 16777216
+			m_l2Power(25) = 33554432
+			m_l2Power(26) = 67108864
+			m_l2Power(27) = 134217728
+			m_l2Power(28) = 268435456
+			m_l2Power(29) = 536870912
+			m_l2Power(30) = 1073741824
+		End Sub
+
+		Private Function LShift(lValue, iShiftBits)
+		    If iShiftBits = 0 Then
+		        LShift = lValue
+		        Exit Function
+		    ElseIf iShiftBits = 31 Then
+		        If lValue And 1 Then
+		            LShift = &H80000000
+		        Else
+		            LShift = 0
+		        End If
+		        Exit Function
+		    ElseIf iShiftBits < 0 Or iShiftBits > 31 Then
+		        Err.Raise 6
+		    End If
+
+		    If (lValue And m_l2Power(31 - iShiftBits)) Then
+		        LShift = ((lValue And m_lOnBits(31 - (iShiftBits + 1))) * m_l2Power(iShiftBits)) Or &H80000000
+		    Else
+		        LShift = ((lValue And m_lOnBits(31 - iShiftBits)) * m_l2Power(iShiftBits))
+		    End If
+		End Function
+
+		Private Function RShift(lValue, iShiftBits)
+		    If iShiftBits = 0 Then
+		        RShift = lValue
+		        Exit Function
+		    ElseIf iShiftBits = 31 Then
+		        If lValue And &H80000000 Then
+		            RShift = 1
+		        Else
+		            RShift = 0
+		        End If
+		        Exit Function
+		    ElseIf iShiftBits < 0 Or iShiftBits > 31 Then
+		        Err.Raise 6
+		    End If
+
+		    RShift = (lValue And &H7FFFFFFE) \ m_l2Power(iShiftBits)
+
+		    If (lValue And &H80000000) Then
+		        RShift = (RShift Or (&H40000000 \ m_l2Power(iShiftBits - 1)))
+		    End If
+		End Function
+
+		Private Function LShiftByte(bytValue, bytShiftBits)
+		    If bytShiftBits = 0 Then
+		        LShiftByte = bytValue
+		        Exit Function
+		    ElseIf bytShiftBits = 7 Then
+		        If bytValue And 1 Then
+		            LShiftByte = &H80
+		        Else
+		            LShiftByte = 0
+		        End If
+		        Exit Function
+		    ElseIf bytShiftBits < 0 Or bytShiftBits > 7 Then
+		        Err.Raise 6
+		    End If
+
+		    LShiftByte = ((bytValue And m_bytOnBits(7 - bytShiftBits)) * m_byt2Power(bytShiftBits))
+		End Function
+
+		Private Function RShiftByte(bytValue, bytShiftBits)
+		    If bytShiftBits = 0 Then
+		        RShiftByte = bytValue
+		        Exit Function
+		    ElseIf bytShiftBits = 7 Then
+		        If bytValue And &H80 Then
+		            RShiftByte = 1
+		        Else
+		            RShiftByte = 0
+		        End If
+		        Exit Function
+		    ElseIf bytShiftBits < 0 Or bytShiftBits > 7 Then
+		        Err.Raise 6
+		    End If
+
+		    RShiftByte = bytValue \ m_byt2Power(bytShiftBits)
+		End Function
+
+		Private Function RotateLeft(lValue, iShiftBits)
+		    RotateLeft = LShift(lValue, iShiftBits) Or RShift(lValue, (32 - iShiftBits))
+		End Function
+
+		Private Function RotateLeftByte(bytValue, bytShiftBits)
+		    RotateLeftByte = LShiftByte(bytValue, bytShiftBits) Or RShiftByte(bytValue, (8 - bytShiftBits))
+		End Function
+
+		Private Function Pack(b())
+		    Dim lCount
+		    Dim lTemp
+
+		    For lCount = 0 To 3
+		        lTemp = b(lCount)
+		        Pack = Pack Or LShift(lTemp, (lCount * 8))
+		    Next
+		End Function
+
+		Private Function PackFrom(b(), k)
+		    Dim lCount
+		    Dim lTemp
+
+		    For lCount = 0 To 3
+		        lTemp = b(lCount + k)
+		        PackFrom = PackFrom Or LShift(lTemp, (lCount * 8))
+		    Next
+		End Function
+
+		Private Sub Unpack(a, b())
+		    b(0) = a And m_lOnBits(7)
+		    b(1) = RShift(a, 8) And m_lOnBits(7)
+		    b(2) = RShift(a, 16) And m_lOnBits(7)
+		    b(3) = RShift(a, 24) And m_lOnBits(7)
+		End Sub
+
+		Private Sub UnpackFrom(a, b(), k)
+		    b(0 + k) = a And m_lOnBits(7)
+		    b(1 + k) = RShift(a, 8) And m_lOnBits(7)
+		    b(2 + k) = RShift(a, 16) And m_lOnBits(7)
+		    b(3 + k) = RShift(a, 24) And m_lOnBits(7)
+		End Sub
+
+		Private Function xtime(a)
+		    Dim b
+
+		    If (a And &H80) Then
+		        b = &H1B
+		    Else
+		        b = 0
+		    End If
+
+		    xtime = LShiftByte(a, 1)
+		    xtime = xtime Xor b
+		End Function
+
+		Private Function bmul(x, y)
+		    If x <> 0 And y <> 0 Then
+		        bmul = m_ptab((CLng(m_ltab(x)) + CLng(m_ltab(y))) Mod 255)
+		    Else
+		        bmul = 0
+		    End If
+		End Function
+
+		Private Function SubByte(a)
+		    Dim b(3)
+
+		    Unpack a, b
+		    b(0) = m_fbsub(b(0))
+		    b(1) = m_fbsub(b(1))
+		    b(2) = m_fbsub(b(2))
+		    b(3) = m_fbsub(b(3))
+
+		    SubByte = Pack(b)
+		End Function
+
+		Private Function product(x, y)
+		    Dim xb(3)
+		    Dim yb(3)
+
+		    Unpack x, xb
+		    Unpack y, yb
+		    product = bmul(xb(0), yb(0)) Xor bmul(xb(1), yb(1)) Xor bmul(xb(2), yb(2)) Xor bmul(xb(3), yb(3))
+		End Function
+
+		Private Function InvMixCol(x)
+		    Dim y
+		    Dim m
+		    Dim b(3)
+
+		    m = Pack(m_InCo)
+		    b(3) = product(m, x)
+		    m = RotateLeft(m, 24)
+		    b(2) = product(m, x)
+		    m = RotateLeft(m, 24)
+		    b(1) = product(m, x)
+		    m = RotateLeft(m, 24)
+		    b(0) = product(m, x)
+		    y = Pack(b)
+
+		    InvMixCol = y
+		End Function
+
+		Private Function ByteSub(x)
+		    Dim y
+		    Dim z
+
+		    z = x
+		    y = m_ptab(255 - m_ltab(z))
+		    z = y
+		    z = RotateLeftByte(z, 1)
+		    y = y Xor z
+		    z = RotateLeftByte(z, 1)
+		    y = y Xor z
+		    z = RotateLeftByte(z, 1)
+		    y = y Xor z
+		    z = RotateLeftByte(z, 1)
+		    y = y Xor z
+		    y = y Xor &H63
+
+		    ByteSub = y
+		End Function
+
+		Public Sub gentables()
+		    Dim i
+		    Dim y
+		    Dim b(3)
+		    Dim ib
+
+		    m_ltab(0) = 0
+		    m_ptab(0) = 1
+		    m_ltab(1) = 0
+		    m_ptab(1) = 3
+		    m_ltab(3) = 1
+
+		    For i = 2 To 255
+		        m_ptab(i) = m_ptab(i - 1) Xor xtime(m_ptab(i - 1))
+		        m_ltab(m_ptab(i)) = i
+		    Next
+
+		    m_fbsub(0) = &H63
+		    m_rbsub(&H63) = 0
+
+		    For i = 1 To 255
+		        ib = i
+		        y = ByteSub(ib)
+		        m_fbsub(i) = y
+		        m_rbsub(y) = i
+		    Next
+
+		    y = 1
+		    For i = 0 To 29
+		        m_rco(i) = y
+		        y = xtime(y)
+		    Next
+
+		    For i = 0 To 255
+		        y = m_fbsub(i)
+		        b(3) = y Xor xtime(y)
+		        b(2) = y
+		        b(1) = y
+		        b(0) = xtime(y)
+		        m_ftable(i) = Pack(b)
+
+		        y = m_rbsub(i)
+		        b(3) = bmul(m_InCo(0), y)
+		        b(2) = bmul(m_InCo(1), y)
+		        b(1) = bmul(m_InCo(2), y)
+		        b(0) = bmul(m_InCo(3), y)
+		        m_rtable(i) = Pack(b)
+		    Next
+		End Sub
+
+		Public Sub gkey(nb, nk, key())
+		    Dim i
+		    Dim j
+		    Dim k
+		    Dim m
+		    Dim N
+		    Dim C1
+		    Dim C2
+		    Dim C3
+		    Dim CipherKey(7)
+
+		    m_Nb = nb
+		    m_Nk = nk
+
+		    If m_Nb >= m_Nk Then
+		        m_Nr = 6 + m_Nb
+		    Else
+		        m_Nr = 6 + m_Nk
+		    End If
+
+		    C1 = 1
+		    If m_Nb < 8 Then
+		        C2 = 2
+		        C3 = 3
+		    Else
+		        C2 = 3
+		        C3 = 4
+		    End If
+
+		    For j = 0 To nb - 1
+		        m = j * 3
+
+		        m_fi(m) = (j + C1) Mod nb
+		        m_fi(m + 1) = (j + C2) Mod nb
+		        m_fi(m + 2) = (j + C3) Mod nb
+		        m_ri(m) = (nb + j - C1) Mod nb
+		        m_ri(m + 1) = (nb + j - C2) Mod nb
+		        m_ri(m + 2) = (nb + j - C3) Mod nb
+		    Next
+
+		    N = m_Nb * (m_Nr + 1)
+
+		    For i = 0 To m_Nk - 1
+		        j = i * 4
+		        CipherKey(i) = PackFrom(key, j)
+		    Next
+
+		    For i = 0 To m_Nk - 1
+		        m_fkey(i) = CipherKey(i)
+		    Next
+
+		    j = m_Nk
+		    k = 0
+		    Do While j < N
+		        m_fkey(j) = m_fkey(j - m_Nk) Xor _
+		            SubByte(RotateLeft(m_fkey(j - 1), 24)) Xor m_rco(k)
+		        If m_Nk <= 6 Then
+		            i = 1
+		            Do While i < m_Nk And (i + j) < N
+		                m_fkey(i + j) = m_fkey(i + j - m_Nk) Xor _
+		                    m_fkey(i + j - 1)
+		                i = i + 1
+		            Loop
+		        Else
+		            i = 1
+		            Do While i < 4 And (i + j) < N
+		                m_fkey(i + j) = m_fkey(i + j - m_Nk) Xor _
+		                    m_fkey(i + j - 1)
+		                i = i + 1
+		            Loop
+		            If j + 4 < N Then
+		                m_fkey(j + 4) = m_fkey(j + 4 - m_Nk) Xor _
+		                    SubByte(m_fkey(j + 3))
+		            End If
+		            i = 5
+		            Do While i < m_Nk And (i + j) < N
+		                m_fkey(i + j) = m_fkey(i + j - m_Nk) Xor _
+		                    m_fkey(i + j - 1)
+		                i = i + 1
+		            Loop
+		        End If
+
+		        j = j + m_Nk
+		        k = k + 1
+		    Loop
+
+		    For j = 0 To m_Nb - 1
+		        m_rkey(j + N - nb) = m_fkey(j)
+		    Next
+
+		    i = m_Nb
+		    Do While i < N - m_Nb
+		        k = N - m_Nb - i
+		        For j = 0 To m_Nb - 1
+		            m_rkey(k + j) = InvMixCol(m_fkey(i + j))
+		        Next
+		        i = i + m_Nb
+		    Loop
+
+		    j = N - m_Nb
+		    Do While j < N
+		        m_rkey(j - N + m_Nb) = m_fkey(j)
+		        j = j + 1
+		    Loop
+		End Sub
+
+		Public Sub encrypt(buff())
+		    Dim i
+		    Dim j
+		    Dim k
+		    Dim m
+		    Dim a(7)
+		    Dim b(7)
+		    Dim x
+		    Dim y
+		    Dim t
+
+		    For i = 0 To m_Nb - 1
+		        j = i * 4
+
+		        a(i) = PackFrom(buff, j)
+		        a(i) = a(i) Xor m_fkey(i)
+		    Next
+
+		    k = m_Nb
+		    x = a
+		    y = b
+
+		    For i = 1 To m_Nr - 1
+		        For j = 0 To m_Nb - 1
+		            m = j * 3
+		            y(j) = m_fkey(k) Xor m_ftable(x(j) And m_lOnBits(7)) Xor _
+		                RotateLeft(m_ftable(RShift(x(m_fi(m)), 8) And m_lOnBits(7)), 8) Xor _
+		                RotateLeft(m_ftable(RShift(x(m_fi(m + 1)), 16) And m_lOnBits(7)), 16) Xor _
+		                RotateLeft(m_ftable(RShift(x(m_fi(m + 2)), 24) And m_lOnBits(7)), 24)
+		            k = k + 1
+		        Next
+		        t = x
+		        x = y
+		        y = t
+		    Next
+
+		    For j = 0 To m_Nb - 1
+		        m = j * 3
+		        y(j) = m_fkey(k) Xor m_fbsub(x(j) And m_lOnBits(7)) Xor _
+		            RotateLeft(m_fbsub(RShift(x(m_fi(m)), 8) And m_lOnBits(7)), 8) Xor _
+		            RotateLeft(m_fbsub(RShift(x(m_fi(m + 1)), 16) And m_lOnBits(7)), 16) Xor _
+		            RotateLeft(m_fbsub(RShift(x(m_fi(m + 2)), 24) And m_lOnBits(7)), 24)
+		        k = k + 1
+		    Next
+
+		    For i = 0 To m_Nb - 1
+		        j = i * 4
+		        UnpackFrom y(i), buff, j
+		        x(i) = 0
+		        y(i) = 0
+		    Next
+		End Sub
+
+		Public Sub decrypt(buff())
+		    Dim i
+		    Dim j
+		    Dim k
+		    Dim m
+		    Dim a(7)
+		    Dim b(7)
+		    Dim x
+		    Dim y
+		    Dim t
+
+		    For i = 0 To m_Nb - 1
+		        j = i * 4
+		        a(i) = PackFrom(buff, j)
+		        a(i) = a(i) Xor m_rkey(i)
+		    Next
+
+		    k = m_Nb
+		    x = a
+		    y = b
+
+		    For i = 1 To m_Nr - 1
+		        For j = 0 To m_Nb - 1
+		            m = j * 3
+		            y(j) = m_rkey(k) Xor m_rtable(x(j) And m_lOnBits(7)) Xor _
+		                RotateLeft(m_rtable(RShift(x(m_ri(m)), 8) And m_lOnBits(7)), 8) Xor _
+		                RotateLeft(m_rtable(RShift(x(m_ri(m + 1)), 16) And m_lOnBits(7)), 16) Xor _
+		                RotateLeft(m_rtable(RShift(x(m_ri(m + 2)), 24) And m_lOnBits(7)), 24)
+		            k = k + 1
+		        Next
+		        t = x
+		        x = y
+		        y = t
+		    Next
+
+		    For j = 0 To m_Nb - 1
+		        m = j * 3
+
+		        y(j) = m_rkey(k) Xor m_rbsub(x(j) And m_lOnBits(7)) Xor _
+		            RotateLeft(m_rbsub(RShift(x(m_ri(m)), 8) And m_lOnBits(7)), 8) Xor _
+		            RotateLeft(m_rbsub(RShift(x(m_ri(m + 1)), 16) And m_lOnBits(7)), 16) Xor _
+		            RotateLeft(m_rbsub(RShift(x(m_ri(m + 2)), 24) And m_lOnBits(7)), 24)
+		        k = k + 1
+		    Next
+
+		    For i = 0 To m_Nb - 1
+		        j = i * 4
+
+		        UnpackFrom y(i), buff, j
+		        x(i) = 0
+		        y(i) = 0
+		    Next
+		End Sub
+
+		Private Function IsInitialized(vArray)
+		    On Error Resume Next
+
+		    IsInitialized = IsNumeric(UBound(vArray))
+		End Function
+
+		Private Sub CopyBytesASP(bytDest, lDestStart, bytSource(), lSourceStart, lLength)
+		    Dim lCount
+
+		    lCount = 0
+		    Do
+		        bytDest(lDestStart + lCount) = bytSource(lSourceStart + lCount)
+		        lCount = lCount + 1
+		    Loop Until lCount = lLength
+		End Sub
+
+		Public Function EncryptData(bytMessage, bytPassword)
+		    Dim bytKey(31)
+		    Dim bytIn()
+		    Dim bytOut()
+		    Dim bytTemp(31)
+		    Dim lCount
+		    Dim lLength
+		    Dim lEncodedLength
+		    Dim bytLen(3)
+		    Dim lPosition
+
+		    If Not IsInitialized(bytMessage) Then
+		        Exit Function
+		    End If
+		    If Not IsInitialized(bytPassword) Then
+		        Exit Function
+		    End If
+
+		    For lCount = 0 To UBound(bytPassword)
+		        bytKey(lCount) = bytPassword(lCount)
+		        If lCount = 31 Then
+		            Exit For
+		        End If
+		    Next
+
+		    gentables
+		    gkey 8, 8, bytKey
+
+		    lLength = UBound(bytMessage) + 1
+		    lEncodedLength = lLength + 4
+
+		    If lEncodedLength Mod 32 <> 0 Then
+		        lEncodedLength = lEncodedLength + 32 - (lEncodedLength Mod 32)
+		    End If
+		    ReDim bytIn(lEncodedLength - 1)
+		    ReDim bytOut(lEncodedLength - 1)
+
+		    Unpack lLength, bytIn
+		    CopyBytesASP bytIn, 4, bytMessage, 0, lLength
+
+		    For lCount = 0 To lEncodedLength - 1 Step 32
+		        CopyBytesASP bytTemp, 0, bytIn, lCount, 32
+		        Encrypt bytTemp
+		        CopyBytesASP bytOut, lCount, bytTemp, 0, 32
+		    Next
+
+		    EncryptData = bytOut
+		End Function
+
+		Public Function DecryptData(bytIn, bytPassword)
+		    Dim bytMessage()
+		    Dim bytKey(31)
+		    Dim bytOut()
+		    Dim bytTemp(31)
+		    Dim lCount
+		    Dim lLength
+		    Dim lEncodedLength
+		    Dim bytLen(3)
+		    Dim lPosition
+
+		    If Not IsInitialized(bytIn) Then
+		        Exit Function
+		    End If
+		    If Not IsInitialized(bytPassword) Then
+		        Exit Function
+		    End If
+
+		    lEncodedLength = UBound(bytIn) + 1
+
+		    If lEncodedLength Mod 32 <> 0 Then
+		        Exit Function
+		    End If
+
+		    For lCount = 0 To UBound(bytPassword)
+		        bytKey(lCount) = bytPassword(lCount)
+		        If lCount = 31 Then
+		            Exit For
+		        End If
+		    Next
+
+		    gentables
+		    gkey 8, 8, bytKey
+
+		    ReDim bytOut(lEncodedLength - 1)
+
+		    For lCount = 0 To lEncodedLength - 1 Step 32
+		        CopyBytesASP bytTemp, 0, bytIn, lCount, 32
+		        Decrypt bytTemp
+		        CopyBytesASP bytOut, lCount, bytTemp, 0, 32
+		    Next
+
+		    lLength = Pack(bytOut)
+
+		    If lLength > lEncodedLength - 4 Then
+		        Exit Function
+		    End If
+
+		    ReDim bytMessage(lLength - 1)
+		    CopyBytesASP bytMessage, 0, bytOut, 4, lLength
+
+		    DecryptData = bytMessage
+		End Function
+
+		'=================================================
+		'This function is called by the system
+		Public Function AES_Encrypt(sPlain,sPassword)
+		  Dim lLength
+		  Dim lCount
+		  Dim counter
+		  Dim k
+		  Dim sTemp
+		  Dim bytClear
+
+		  SetupVars
+		  lLength = Len(sPlain)
+
+		  ReDim bytIn(lLength-1)
+		  For lCount = 1 To lLength
+		    bytIn(lCount-1)=CByte(AscB(Mid(sPlain,lCount,1)))
+		  Next
+		  lLength = Len(sPassword)
+		  ReDim bytPassword(lLength-1)
+		  For lCount = 1 To lLength
+		    bytPassword(lCount-1)=CByte(AscB(Mid(sPassword,lCount,1)))
+		  Next
+
+		  bytOut = EncryptData(bytIn, bytPassword)
+
+		  sTemp = ""
+		  For lCount = 0 To UBound(bytOut)
+		    sTemp = sTemp & Right("0" & Hex(bytOut(lCount)), 2)
+		  Next
+		  AES_Encrypt= stemp
+		end function
+
+		Public Function AES_Decrypt(sEncrypted, sPassword)
+		    Dim lLength
+			Dim lCount
+			Dim counter
+			Dim k
+			Dim sTemp
+		    Dim bytClear
+
+		    SetupVars
+		    lLength = Len(sEncrypted)/2
+		    ReDim bytIn(lLength-1)
+		    counter=1
+		    For lCount = 1 To lLength
+		        k="&H" & (Mid(sEncrypted,counter,2))
+		        counter=counter+2
+		    bytIn(lCount-1)=CByte(k)
+
+		    Next
+		    lLength = Len(sPassword)
+		    ReDim bytPassword(lLength-1)
+		    For lCount = 1 To lLength
+		        bytPassword(lCount-1)=CByte(AscB(Mid(sPassword,lCount,1)))
+		    Next
+
+		    bytClear = DecryptData(bytIn, bytPassword)
+
+
+		    lLength = UBound(bytClear) + 1
+		    sTemp = ""
+		    For lCount = 0 To lLength - 1
+		        sTemp = sTemp & Chr(bytClear(lCount))
+		    Next
+
+		  AES_Decrypt=sTemp
+		end function
+	End Class
+
+Function Writexml(strelemname,strelemtext)
+
+Set objRoot = xmldom.SelectSingleNode("Inventory")
+
+strelemname = lcase(strelemname)
+
+if strelemtext <> "" Then
+
+Set objChild = XmlDom.createElement(strelemname)
+objchild.text = strelemtext
+objRoot.appendChild objChild
+
+Call XMLSave(strtargetfile)
+
+End If
+
+End Function
+
+Function XMLSave(filename)
+
+'Save the document
+if document.sysform.C3.checked then
+XmlDom.Save filename
+else
+'do nothing
+ENd If
+End Function
+
+
+Function ReadXML(strxmlfile,strelem)
+
+strelem = lcase(strelem)
+
+
+Set Xmlread = CreateObject("Msxml2.DOMDocument.3.0")
+
+xmlread.load Strxmlfile
+ON ERROR RESUME NEXT			
+Set ElemList = xmlread.getElementsByTagName(strelem) 
+IF ERR THEN
+
+plot = ""
+
+else
+
+plot = ElemList.item(0).Text 
+
+	
+		checkencrypt = right(plot,2)
+
+
+			if checkencrypt = "==" Then
+				'decrypt
+				
+				plot = oAES.AES_decrypt(oBase64.decode(plot), cVersteckteSchlussel)
+	
+	End If
+End if
+
+readxml = plot
+
+END FUNCTION
+
+
+Function VerifyFile(xmlfile)
+
+If FSO.FileExists(xmlfile) Then
+
+VerifyFile = TRUE
+else
+
+VerifyFile = FALSE
+End If
+
+End Function
+
+
+Function XMLLoad(RootElem)
+XMLLOAD = FALSE
+
+Set XmlDom = CreateObject("Microsoft.XMLDOM")
+XmlDom.Load strtargetfile
+Err.Clear
+
+Set objRoot = xmldom.SelectSingleNode(RootElem)
+IF ERR THEN
+XMLLoad = FALSE
+else
+XMLLoad = TRUE
+End If
+
+End Function
+
+
+Function DefineXML(RootElem)
+
+'Connect to XMLDOM Object
+Set XmlDom = CreateObject("Microsoft.XMLDOM")
+
+
+'Create XML NODE with version
+set xmlpi = XmlDom.createProcessingInstruction("xml","version='1.0'")
+'Inset XML ROOT NODE
+XmlDom.insertBefore xmlPI, XmlDom.childNodes(0)
+
+
+'Define a root element
+Set objRoot = XmlDom.createElement(RootElem)
+'Create the element by appendingchild
+XmlDom.appendChild objRoot
+
+End Function
+
+
+Function CreateRootElem(strelemname)
+
+Set objSubRoot = XmlDom.createElement(strelemname)
+objRoot.appendChild objSubRoot
+Call XMLSave(strtargetfile)
+End Function
+
+Function CreateChildElem(strelemname,strelemtext)
+
+Set objchildroot = XmlDom.createElement(strelemname)
+objchildroot.text = strelemtext
+objSubRoot.appendChild objchildroot
+Call XMLSave(strtargetfile)
+End Function
+
+Function CreateSubChildElem(strelemname,strelemtext)
+
+Set objsubchildroot = XmlDom.createElement(strelemname)
+objsubchildroot.text = strelemtext
+objchildRoot.appendChild objsubchildroot
+Call XMLSave(strtargetfile)
+End Function
+
+</SCRIPT>
+
+<link rel="stylesheet" type="text/css" href="style.css">
+
+</head>
+
+<body topmargin="0" leftmargin="0" rightmargin="0" bottommargin="0" marginwidth="0" marginheight="0" onload="check_state()">
+
+
+<div class="page" id="Page">
+</div>
+<div class="header" id="header">
+
+	<fieldset class="title" id="title">
+		
+		<h1>System Inventory and Discovery Tool</h1>
+
+<fieldset class="navbar" id="navbar">
+
+<form name="Form1">
+<input type="radio" value="R1" name="R1" onclick="Click_Domain()">Domain Mode
+<input type="radio" value="R2" name="R2" onclick="Click_System()">System Mode
+
+<!--
+
+<input type="radio" value="R3" name="R3" onclick="Click_Scanner()">IP Scanner 
+Mode
+ -->
+</form>
+</fieldset>
+</fieldset>
+</div>
+
+<div class="info" id="scanner">
+	<fieldset id="maininfo" class="maininfo">
+	<legend>IP Scanner</legend>
+</div>
+
+<div class="info" id="system">
+
+	<fieldset id="maininfo" class="maininfo">
+		<legend>System Inventory</legend>
+	<form name="sysform" enctype="multipart/form-data">
+		<fieldset>
+		<legend>Target</legend>
+		<table class="table">
+			<tr>
+				<td>Computername <input type="text" name="Compname" size="15"></td>
+				<td>Target List <input type="file" name="TargetFile" size="20"></td>
+			</tr>
+		</table>
+		</fieldset><fieldset>
+<legend>Inventory Type</legend>
+<input type="checkbox" name=C1>Hardware Inventory
+<input type="checkbox" name=C2>Software Inventory
+</fieldset><fieldset>
+<legend>Output</legend>
+<input type="checkbox" name=C3>XML
+</fieldset>
+<input type="reset" value="Reset" name="B2">
+<input type="button" value="Start" name="B1" class="Buttons" onclick="InventoryExecute()"> 
+		
+</form>
+
+
+	</fieldset>
+</div>
+
+ <div class="info" id="domain" style="z-index: 1; position:absolute; left:25px; top:140px">
+
+	<fieldset id="maininfo" class="maininfo">
+<legend>Domain Mode</legend>
+
+
+<form name="Domain_form">
+
+<fieldset>
+<legend>Target Domain</legend>
+<select name="DomainList" size="1" onchange="ListOU()">
+<option selected value="Select Domain">Select Domain</option>
+</select>
+
+
+</fieldset>
+
+
+<fieldset>
+<legend>Object Type</legend>
+<input type="radio" name="objtype" value="User">User
+<input type="radio" name="objtype" value="Group">Group
+<input type="radio" name="objtype" value="Computer">Computer
+<input type="radio" name="objtype" value="organizationalUnit">Organizational Unit
+</fieldset>
+
+<fieldset>
+<legend>Scope</legend>
+<select name="OUlist" size="1">
+<option selected value="Domain">Domain</option>
+</select>
+</fieldset>
+
+<fieldset>
+<legend>Search String</legend>
+<input type="text" name="SearchString" size="20" disabled value="currently not developed">
+</fieldset>
+
+
+
+<input type="reset" value="Reset" name="B3">
+<input type="button" value="Start" name="B4" class="Buttons" onclick="SearchExecute()">
+
+</form>
+</fieldset>
+</div>
+
+
+
+<div class="footer" id="footer">
+<fieldset>
+<legend>Log</legend>
+
+<div class="log" id="log">
+
+
+</div>
+		
+&nbsp
+
+
+</fieldset>
+</div>
+
+
+
+
+
+
+</body>
+
+</html>

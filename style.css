@@ -1,0 +1,47 @@
+body {
+font-family: Tahoma;
+font-size: 10px;
+color: #000000;
+cursor: default;
+background-color: #FFFFFF;
+/*background: buttonface;*/
+border:0px;
+ 
+}
+
+table {
+border: 0 none;
+padding: 2px;
+float: centre;
+{
+
+.Buttons     { float: right; }
+.navbar      { float: right; }
+              
+h1 {
+font-size: 2em;
+text-align: center;
+font-weight: bold
+}
+
+h2 {
+font-size: 1.5em;
+text-align: left;
+font-weight: bold;
+}
+
+h3 {
+font-size: 0.8em;
+text-align: left;
+font-weight: bold;
+}
+
+legend {font-weight: bold;font-size: 10pt;text-align: left;}
+fieldset {border: 0.1em solid #9A9A9A;padding: 0.2em;margin: 0.2em; text-align:left}
+title {border: 0.1em solid #9A9A9A;padding: 1em;margin: 1em; text-align:center; background-color:#99CCFF}
+.Page {position: absolute; left: 0; top: 0; z-index: 0 }
+.header {margin: 0;padding 0;text-align: center; position:absolute; left:25; z-index:0; top:20; width:750; height:100}    
+.Info {display:none; margin: 0;padding 0;text-align: center; position:absolute; left:25; z-index:0; top:140; width:750; height:250}   
+.maininfo {} 
+.footer {margin: 0;padding 0;text-align: center; position:absolute; left:25; z-index:0; top:405; width:750; height:100}
+.log {width: 720 ;  height: 250 ;  overflow: scroll;border: 1px solid #808080;position:inline; background-color:#FFFFFF}
